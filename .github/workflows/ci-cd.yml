@@ -1,0 +1,372 @@
+# CampusPass CI/CD pipeline.
+#
+#   pull request -> secret scan, code scan, config scan, unit tests, image build + scan, end-to-end test
+#   push to main -> all of the above, then push multi-arch images and deploy via GitOps (Argo CD)
+#
+# Security notes:
+#  - Every third-party action is pinned to a full commit SHA (tag in the comment). Tags can be
+#    moved by an attacker, as happened to aquasecurity/trivy-action in March 2026; SHAs cannot.
+#  - Trivy is pinned to v0.69.3, a release published before that incident.
+#  - The workflow token is read-only by default; jobs ask for extra permissions only where needed.
+
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  TRIVY_VERSION: v0.69.3
+  GITLEAKS_VERSION: 8.28.0
+  SEMGREP_VERSION: 1.180.0
+
+jobs:
+  # ----------------------------------------------------------------- 1. security gates
+  secret-scan:
+    name: Secret scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }   # scan the whole history, not just the latest commit
+      - name: Install Gitleaks (checksum verified)
+        run: |
+          base=https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}
+          file=gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          curl -sSLO "$base/$file" && curl -sSLO "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " $file\$" gitleaks_${GITLEAKS_VERSION}_checksums.txt | sha256sum -c -
+          tar xzf "$file" gitleaks
+      - name: Scan every commit for leaked secrets
+        run: ./gitleaks git . --config .gitleaks.toml --redact --verbose
+
+  code-scan:
+    name: Code scan (Semgrep)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # publish findings to the repo's Security tab
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.13" }
+      - run: pip install "semgrep==${SEMGREP_VERSION}"
+      - name: Full report (all severities) to the Security tab
+        run: >
+          semgrep scan --metrics off
+          --config p/default --config p/owasp-top-ten --config p/kubernetes --config p/dockerfile
+          --sarif --output semgrep.sarif
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        if: always()
+        with: { sarif_file: semgrep.sarif, category: semgrep }
+      - name: Fail on high-severity (ERROR) findings
+        run: >
+          semgrep scan --metrics off --error --severity ERROR
+          --config p/default --config p/owasp-top-ten --config p/kubernetes --config p/dockerfile
+
+  config-scan:
+    name: Config scan (Trivy + Hadolint + kubeconform)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Trivy misconfiguration scan (Dockerfiles, Kubernetes, Compose, Terraform)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        env:
+          TRIVY_IGNOREFILE: ./trivyignore.yaml   # reviewed false positives, each with a written reason
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+      - name: Lint Dockerfiles (Hadolint)
+        run: |
+          for f in services/*/Dockerfile; do
+            echo "::group::$f"
+            docker run --rm -i -v "$PWD/.hadolint.yaml:/.config/hadolint.yaml:ro" hadolint/hadolint:v2.12.0 < "$f"
+            echo "::endgroup::"
+          done
+      - name: Render the platform Helm charts with our values (same versions as cloud-init)
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
+          helm template kps prometheus-community/kube-prometheus-stack --version 92.3.0 -n monitoring \
+            -f monitoring/values/kube-prometheus-stack.yaml \
+            --set 'grafana.ingress.hosts[0]=campuspass.example.com' > /dev/null
+          helm template loki grafana/loki --version 6.55.0 -n monitoring -f monitoring/values/loki.yaml > /dev/null
+          helm template alloy grafana/alloy --version 1.13.1 -n monitoring -f monitoring/values/alloy.yaml > /dev/null
+          echo "All three charts render with our values."
+      - name: Validate Kubernetes manifests against the API schemas
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          for overlay in local prod; do
+            kubectl kustomize "k8s/overlays/$overlay" | ./kubeconform -strict -summary \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          done
+          ./kubeconform -strict -summary \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            monitoring/manifests platform/argocd
+
+  # ----------------------------------------------------------------- 2. unit tests
+  test-node:
+    name: Test ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [auth-service, booking-service, frontend]
+    services:
+      # A real Redis, so booking-service proves "500 concurrent students, 100 seats" against the real thing.
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    defaults:
+      run: { working-directory: "services/${{ matrix.service }}" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/${{ matrix.service }}/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm test
+        env: { REDIS_TEST_URL: "redis://localhost:6379" }
+      - if: matrix.service == 'frontend'
+        run: npm run build
+
+  test-java:
+    name: Test event-service
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: services/event-service }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with: { distribution: temurin, java-version: "21", cache: maven }
+      - run: mvn -B verify
+
+  test-python:
+    name: Test ticket-service
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: services/ticket-service }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.13", cache: pip, cache-dependency-path: services/ticket-service/requirements*.txt }
+      - run: pip install -r requirements-dev.txt pip-audit
+      - run: pip-audit -r requirements.txt
+      - run: pytest -q
+
+  # ----------------------------------------------------------------- 3. build + scan images
+  build:
+    name: Build ${{ matrix.service }}
+    needs: [secret-scan, code-scan, config-scan, test-node, test-java, test-python]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write          # push to GitHub Container Registry
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [auth-service, event-service, booking-service, ticket-service, api-gateway, frontend]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Image name (GHCR needs lowercase)
+        run: |
+          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE=ghcr.io/${owner}/campuspass-${{ matrix.service }}" >> "$GITHUB_ENV"
+          echo "TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build for scanning (amd64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: services/${{ matrix.service }}
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE }}:scan
+          build-args: BUILD_SHA=${{ env.TAG }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: ${{ env.IMAGE }}:scan
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: json
+          output: trivy-${{ matrix.service }}.json
+          exit-code: "0"
+
+      - name: Fail on fixable CRITICAL vulnerabilities (shown as annotations)
+        run: |
+          report=trivy-${{ matrix.service }}.json
+          jq -r '.Results[]? | .Target as $t | .Vulnerabilities[]? | [.Severity, .VulnerabilityID, .PkgName, .InstalledVersion, .FixedVersion, $t] | @tsv' "$report" > findings.tsv || true
+          {
+            echo "### ${{ matrix.service }}: fixable vulnerabilities"
+            echo "| Severity | CVE | Package | Installed | Fixed in | Where |"
+            echo "|---|---|---|---|---|---|"
+            awk -F'\t' '{printf "| %s | %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6}' findings.tsv
+          } >> "$GITHUB_STEP_SUMMARY"
+          awk -F'\t' '$1=="HIGH" {printf "::warning title=%s (HIGH)::%s %s -> %s in %s\n", $2, $3, $4, $5, $6}' findings.tsv
+          if awk -F'\t' '$1=="CRITICAL"' findings.tsv | grep -q .; then
+            awk -F'\t' '$1=="CRITICAL" {printf "::error title=%s (CRITICAL)::%s %s -> fixed in %s, found in %s\n", $2, $3, $4, $5, $6}' findings.tsv
+            exit 1
+          fi
+          echo "No fixable CRITICAL vulnerabilities."
+
+      - name: Software bill of materials (CycloneDX SBOM)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: ${{ env.IMAGE }}:scan
+          format: cyclonedx
+          output: sbom-${{ matrix.service }}.cdx.json
+          skip-setup-trivy: true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-${{ matrix.service }}
+          path: sbom-${{ matrix.service }}.cdx.json
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-arch image (amd64 + arm64 for the Oracle Ampere VM)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: services/${{ matrix.service }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ env.IMAGE }}:${{ env.TAG }}
+            ${{ env.IMAGE }}:latest
+          build-args: BUILD_SHA=${{ env.TAG }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+
+  # ----------------------------------------------------------------- 4. end-to-end test
+  e2e:
+    name: End-to-end test (Docker Compose + k6 rush)
+    needs: [test-node, test-java, test-python]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Start the whole system
+        run: |
+          cp .env.example .env
+          docker compose up -d --build --wait --wait-timeout 300
+          docker compose ps
+      - name: Smoke test the full user journey
+        run: python3 scripts/smoke_test.py http://localhost:3000
+      - name: Registration rush (300 students, 50 seats) must never oversell
+        run: >
+          docker run --rm --network host -v "$PWD/load-tests:/scripts:ro" grafana/k6:1.3.0
+          run -e BASE_URL=http://localhost:3000 -e STUDENTS=300 -e SEATS=50 /scripts/rush.js
+      - name: Show logs if anything failed
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --tail=150
+          # Surface each unhealthy or stopped container as an annotation on the run.
+          docker compose ps -a --format '{{.Service}}|{{.State}}|{{.Health}}' | while IFS='|' read -r svc state health; do
+            if [ "$state" != "running" ] || { [ -n "$health" ] && [ "$health" != "healthy" ]; }; then
+              msg=$(docker compose logs --no-log-prefix --tail=12 "$svc" 2>&1 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+              echo "::error title=${svc} is ${state} ${health}::${msg}"
+            fi
+          done
+
+  # ----------------------------------------------------------------- 5. deploy (GitOps)
+  deploy:
+    name: Deploy via GitOps
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, e2e]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # push to the gitops branch
+    concurrency: { group: deploy-production, cancel-in-progress: false }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - name: Point the production overlay at the new images on the gitops branch
+        run: |
+          tag="sha-${GITHUB_SHA::7}"
+          git config user.name "campuspass-ci"
+          git config user.email "campuspass-ci@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin gitops >/dev/null; then
+            git fetch origin gitops && git checkout gitops
+          else
+            git checkout --orphan gitops
+          fi
+          # The gitops branch mirrors main's files, plus the image tags that were just built and tested.
+          git rm -rq --ignore-unmatch . && git checkout "$GITHUB_SHA" -- .
+          for svc in auth-service event-service booking-service ticket-service api-gateway frontend; do
+            yq -i "(.images[] | select(.name == \"campuspass/${svc}\")).newTag = \"${tag}\"" k8s/overlays/prod/kustomization.yaml
+          done
+          git add -A
+          git commit -m "deploy ${tag} (${GITHUB_SHA})" || echo "nothing to deploy"
+          git push origin gitops
+          echo "### Deployed \`${tag}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Argo CD will roll it out within about 3 minutes." >> "$GITHUB_STEP_SUMMARY"
+
+  # ----------------------------------------------------------------- 6. verify the live site
+  verify-production:
+    name: Verify live site + DAST (OWASP ZAP)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PUBLIC_URL != ''
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write            # ZAP may open an issue with its findings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Wait until Argo CD has rolled out this build
+        run: |
+          want="sha-${GITHUB_SHA::7}"
+          for i in $(seq 1 60); do
+            live=$(curl -fsS "${{ vars.PUBLIC_URL }}/" | grep -o 'campuspass-build" content="[^"]*' | cut -d'"' -f3 || true)
+            echo "attempt $i: live build = ${live:-unknown}, waiting for $want"
+            [ "$live" = "$want" ] && exit 0
+            sleep 15
+          done
+          echo "::error::The live site did not update within 15 minutes. Check Argo CD."
+          exit 1
+      - name: Health and security headers
+        run: |
+          curl -fsS "${{ vars.PUBLIC_URL }}/api/events" > /dev/null
+          headers=$(curl -fsSI "${{ vars.PUBLIC_URL }}/")
+          echo "$headers"
+          for h in content-security-policy x-frame-options x-content-type-options; do
+            echo "$headers" | grep -qi "^$h:" || { echo "::error::missing $h header"; exit 1; }
+          done
+      - name: OWASP ZAP baseline scan (report only)
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+        with:
+          target: ${{ vars.PUBLIC_URL }}
+          fail_action: false
+          allow_issue_writing: false
+          artifact_name: zap-report
