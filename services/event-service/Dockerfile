@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # ---- Stage 1: build the jar with Maven --------------------------------------
 # Java bytecode is the same on every CPU, so this stage always runs natively (fast).
-FROM --platform=$BUILDPLATFORM maven:3.9-eclipse-temurin-21 AS build
+FROM --platform=$BUILDPLATFORM maven:3.9-eclipse-temurin-26 AS build
 WORKDIR /src
 COPY pom.xml .
 RUN mvn -B -q dependency:go-offline
