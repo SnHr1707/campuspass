@@ -1,0 +1,156 @@
+# CampusPass: the whole system on one machine.
+#   cp .env.example .env      (Windows: copy .env.example .env)
+#   docker compose up --build
+#   open http://localhost:3000
+#
+# Only the frontend is published on the host. Everything else talks over the private
+# "backend" network, the same way the services talk inside Kubernetes.
+
+name: campuspass
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  networks: [backend]
+  security_opt: ["no-new-privileges:true"]
+  read_only: true
+
+services:
+  # ---------------------------------------------------------------- data stores
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks: [backend]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-postgres}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-change-me-auth}
+      BOOKING_DB_PASSWORD: ${BOOKING_DB_PASSWORD:-change-me-booking}
+      TICKET_DB_PASSWORD: ${TICKET_DB_PASSWORD:-change-me-ticket}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./compose/postgres-init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    networks: [backend]
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [backend]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---------------------------------------------------------------- microservices
+  auth-service:
+    <<: *service-defaults
+    build: ./services/auth-service
+    image: ghcr.io/snhr1707/campuspass-auth-service:local
+    tmpfs: ["/tmp"]
+    environment:
+      DATABASE_URL: postgres://auth:${AUTH_DB_PASSWORD:-change-me-auth}@postgres:5432/auth_db
+      JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret-change-me-0123456789}
+      ORGANISER_INVITE_CODE: ${ORGANISER_INVITE_CODE:-ORG-2026}
+      VOLUNTEER_INVITE_CODE: ${VOLUNTEER_INVITE_CODE:-VOL-2026}
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  event-service:
+    <<: *service-defaults
+    build: ./services/event-service
+    image: ghcr.io/snhr1707/campuspass-event-service:local
+    tmpfs: ["/tmp"]
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/events
+      REDIS_URL: redis://redis:6379
+      SEED_DEMO: "true"
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  booking-service:
+    <<: *service-defaults
+    build: ./services/booking-service
+    image: ghcr.io/snhr1707/campuspass-booking-service:local
+    tmpfs: ["/tmp"]
+    environment:
+      DATABASE_URL: postgres://booking:${BOOKING_DB_PASSWORD:-change-me-booking}@postgres:5432/booking_db
+      REDIS_URL: redis://redis:6379
+      EVENT_SERVICE_URL: http://event-service:8081
+      TICKET_SERVICE_URL: http://ticket-service:8000
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  ticket-service:
+    <<: *service-defaults
+    build: ./services/ticket-service
+    image: ghcr.io/snhr1707/campuspass-ticket-service:local
+    tmpfs: ["/tmp"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://ticket:${TICKET_DB_PASSWORD:-change-me-ticket}@postgres:5432/ticket_db
+      TICKET_SIGNING_SECRET: ${TICKET_SIGNING_SECRET:-local-dev-ticket-secret-change-me-012345}
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # ---------------------------------------------------------------- edge
+  api-gateway:
+    <<: *service-defaults
+    build: ./services/api-gateway
+    image: ghcr.io/snhr1707/campuspass-api-gateway:local
+    # NGINX writes its rendered config and cache files, so it gets writable tmpfs mounts.
+    # The non-root NGINX user renders its config into conf.d at start-up, so these tmpfs
+    # mounts must be writable by it (mode 1777, like /tmp).
+    volumes:
+      - { type: tmpfs, target: /tmp, tmpfs: { mode: 01777 } }
+      - { type: tmpfs, target: /etc/nginx/conf.d, tmpfs: { mode: 01777 } }
+      - { type: tmpfs, target: /var/cache/nginx, tmpfs: { mode: 01777 } }
+    depends_on:
+      auth-service: { condition: service_healthy }
+      event-service: { condition: service_healthy }
+      booking-service: { condition: service_healthy }
+      ticket-service: { condition: service_healthy }
+
+  frontend:
+    <<: *service-defaults
+    build:
+      context: ./services/frontend
+      args:
+        BUILD_SHA: compose
+    image: ghcr.io/snhr1707/campuspass-frontend:local
+    # The non-root NGINX user renders its config into conf.d at start-up, so these tmpfs
+    # mounts must be writable by it (mode 1777, like /tmp).
+    volumes:
+      - { type: tmpfs, target: /tmp, tmpfs: { mode: 01777 } }
+      - { type: tmpfs, target: /etc/nginx/conf.d, tmpfs: { mode: 01777 } }
+      - { type: tmpfs, target: /var/cache/nginx, tmpfs: { mode: 01777 } }
+    ports:
+      - "3000:8080"
+    depends_on:
+      api-gateway: { condition: service_healthy }
+
+networks:
+  backend:
+
+volumes:
+  postgres-data:
+  mongo-data:
+  redis-data:
