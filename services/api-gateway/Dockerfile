@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # NGINX API gateway. The official image renders /etc/nginx/templates/*.template
 # with environment variables at start-up, so the same image works in Compose and Kubernetes.
-FROM nginxinc/nginx-unprivileged:1.30-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine
 LABEL org.opencontainers.image.source="https://github.com/SnHr1707/campuspass" \
       org.opencontainers.image.description="CampusPass API gateway"
 ENV AUTH_UPSTREAM=auth-service:3001 \
