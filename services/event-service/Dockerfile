@@ -10,7 +10,7 @@ RUN mvn -B -q package -DskipTests \
  && java -Djarmode=tools -jar target/event-service.jar extract --layers --launcher --destination /extracted
 
 # ---- Stage 2: JRE only (no JDK, no Maven) -----------------------------------
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:24-jre-alpine
 LABEL org.opencontainers.image.source="https://github.com/SnHr1707/campuspass" \
       org.opencontainers.image.description="CampusPass event-service"
 # Apply OS security patches released after the base image was published.
