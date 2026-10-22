@@ -1,0 +1,49 @@
+# Argo CD watches Git and keeps the cluster matching it (GitOps).
+#  - campuspass: the app itself, from the "gitops" branch that CI updates with new image tags.
+#  - campuspass-monitoring: dashboards and alert rules, from main.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: campuspass
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/SnHr1707/campuspass.git
+    targetRevision: gitops
+    path: k8s/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: campuspass
+  syncPolicy:
+    automated:
+      prune: true       # delete what was removed from Git
+      selfHeal: true    # undo manual changes made with kubectl
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff: { duration: 10s, factor: 2, maxDuration: 3m }
+  # The HPA changes replica counts at runtime; that is expected, not drift.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers: [/spec/replicas]
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: campuspass-monitoring
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/SnHr1707/campuspass.git
+    targetRevision: main
+    path: monitoring/manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

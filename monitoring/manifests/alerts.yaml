@@ -1,0 +1,42 @@
+# Alert rules evaluated by Prometheus. They show under Alerting in Grafana.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: campuspass-alerts
+  namespace: monitoring
+spec:
+  groups:
+    - name: campuspass
+      rules:
+        - alert: CampusPassHighErrorRate
+          expr: |
+            (sum(rate(http_request_duration_seconds_count{namespace="campuspass",status=~"5.."}[2m])) or vector(0))
+              / clamp_min(sum(rate(http_request_duration_seconds_count{namespace="campuspass"}[2m])), 0.001) > 0.05
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: More than 5% of CampusPass requests are failing
+            description: Check the "Logs" panel on the Registration Rush dashboard for the failing service.
+        - alert: CampusPassBookingAtMaxScale
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{namespace="campuspass",horizontalpodautoscaler="booking-service"}
+              >= kube_horizontalpodautoscaler_spec_max_replicas{namespace="campuspass",horizontalpodautoscaler="booking-service"}
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: booking-service has been at its maximum of 5 pods for 5 minutes
+            description: Demand is above what the autoscaler may add. Consider raising maxReplicas.
+        - alert: CampusPassPodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total{namespace="campuspass"}[10m]) > 3
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} restarted more than 3 times in 10 minutes"
+            description: Kubernetes keeps restarting it. Look at its logs in Grafana.
+        - alert: CampusPassBookingSlow
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{app="booking-service",route="/bookings"}[5m]))) > 2
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: 95% of bookings take longer than 2 seconds
+            description: The booking path is slow. Check booking-service CPU and Redis.
