@@ -12,7 +12,7 @@ ENV VITE_BUILD_SHA=$BUILD_SHA
 RUN npm run build
 
 # ---- Stage 2: serve static files with unprivileged NGINX --------------------
-FROM nginxinc/nginx-unprivileged:1.30-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine
 LABEL org.opencontainers.image.source="https://github.com/SnHr1707/campuspass" \
       org.opencontainers.image.description="CampusPass frontend"
 ENV GATEWAY_UPSTREAM=api-gateway:8080
