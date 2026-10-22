@@ -1,0 +1,22 @@
+# Production on the Oracle Cloud k3s VM. Argo CD deploys this folder from the "gitops" branch;
+# the CI pipeline updates the image tags below on that branch after every successful build.
+#
+# Before the first deploy, set YOUR domain in ingress-patch.yaml (two places).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - cluster-issuer.yaml
+
+images:
+  - { name: campuspass/auth-service,    newName: ghcr.io/snhr1707/campuspass-auth-service,    newTag: latest }
+  - { name: campuspass/event-service,   newName: ghcr.io/snhr1707/campuspass-event-service,   newTag: latest }
+  - { name: campuspass/booking-service, newName: ghcr.io/snhr1707/campuspass-booking-service, newTag: latest }
+  - { name: campuspass/ticket-service,  newName: ghcr.io/snhr1707/campuspass-ticket-service,  newTag: latest }
+  - { name: campuspass/api-gateway,     newName: ghcr.io/snhr1707/campuspass-api-gateway,     newTag: latest }
+  - { name: campuspass/frontend,        newName: ghcr.io/snhr1707/campuspass-frontend,        newTag: latest }
+
+patches:
+  - path: ingress-patch.yaml
+    target: { kind: Ingress, name: campuspass }

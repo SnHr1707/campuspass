@@ -1,0 +1,45 @@
+# Minikube on your laptop.
+#   minikube start --cpus 4 --memory 6g
+#   minikube addons enable ingress && minikube addons enable metrics-server
+#   & minikube -p minikube docker-env --shell powershell | Invoke-Expression   # build straight into Minikube
+#   docker compose build
+#   kubectl apply -k k8s/overlays/local
+#   kubectl -n campuspass port-forward svc/frontend 3000:8080   ->  http://localhost:3000
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - { name: campuspass/auth-service,    newName: ghcr.io/snhr1707/campuspass-auth-service,    newTag: local }
+  - { name: campuspass/event-service,   newName: ghcr.io/snhr1707/campuspass-event-service,   newTag: local }
+  - { name: campuspass/booking-service, newName: ghcr.io/snhr1707/campuspass-booking-service, newTag: local }
+  - { name: campuspass/ticket-service,  newName: ghcr.io/snhr1707/campuspass-ticket-service,  newTag: local }
+  - { name: campuspass/api-gateway,     newName: ghcr.io/snhr1707/campuspass-api-gateway,     newTag: local }
+  - { name: campuspass/frontend,        newName: ghcr.io/snhr1707/campuspass-frontend,        newTag: local }
+
+# Development-only secrets. Production secrets are created on the cluster by scripts/bootstrap.ps1.
+secretGenerator:
+  - name: campuspass-secrets
+    namespace: campuspass
+    options: { disableNameSuffixHash: true }
+    literals:
+      - POSTGRES_PASSWORD=local-postgres
+      - AUTH_DB_PASSWORD=local-auth
+      - BOOKING_DB_PASSWORD=local-booking
+      - TICKET_DB_PASSWORD=local-ticket
+      - JWT_SECRET=local-dev-jwt-secret-change-me-0123456789
+      - TICKET_SIGNING_SECRET=local-dev-ticket-secret-change-me-012345
+      - ORGANISER_INVITE_CODE=ORG-2026
+      - VOLUNTEER_INVITE_CODE=VOL-2026
+
+patches:
+  # Answer on any host name (minikube tunnel serves it on http://127.0.0.1).
+  - target: { kind: Ingress, name: campuspass }
+    patch: |-
+      - op: add
+        path: /spec/ingressClassName
+        value: nginx
+      - op: remove
+        path: /spec/rules/0/host

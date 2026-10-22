@@ -1,0 +1,73 @@
+# Autoscaling and availability rules.
+
+# booking-service is the hot path in a registration rush: it scales 1 -> 5 pods on CPU.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: booking-service
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: booking-service }
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 60 }
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0     # react immediately when the rush starts
+      policies:
+        - { type: Pods, value: 4, periodSeconds: 15 }
+    scaleDown:
+      stabilizationWindowSeconds: 120   # scale back slowly once it is over
+      policies:
+        - { type: Pods, value: 1, periodSeconds: 30 }
+---
+# Every booking also passes the gateway and a JWT check, so these scale too.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-gateway
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api-gateway }
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: auth-service
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: auth-service }
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+---
+# During voluntary disruptions (node maintenance, upgrades) keep at least one pod serving.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: booking-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: booking-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: frontend }

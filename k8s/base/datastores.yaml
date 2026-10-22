@@ -1,0 +1,240 @@
+# Stateful data stores. StatefulSets give each pod a stable name and its own
+# PersistentVolumeClaim, so data survives pod restarts and rescheduling.
+
+# ------------------------------------------------------------------ PostgreSQL
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  init.sh: |
+    #!/bin/sh
+    # One database and one user per service (database-per-service pattern).
+    set -eu
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<SQL
+    CREATE USER auth    WITH PASSWORD '${AUTH_DB_PASSWORD}';
+    CREATE USER booking WITH PASSWORD '${BOOKING_DB_PASSWORD}';
+    CREATE USER ticket  WITH PASSWORD '${TICKET_DB_PASSWORD}';
+    CREATE DATABASE auth_db    OWNER auth;
+    CREATE DATABASE booking_db OWNER booking;
+    CREATE DATABASE ticket_db  OWNER ticket;
+    REVOKE ALL ON DATABASE auth_db    FROM PUBLIC;
+    REVOKE ALL ON DATABASE booking_db FROM PUBLIC;
+    REVOKE ALL ON DATABASE ticket_db  FROM PUBLIC;
+    SQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels: { app: postgres }
+spec:
+  clusterIP: None
+  selector: { app: postgres }
+  ports:
+    - { name: postgres, port: 5432, targetPort: 5432 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels: { app: postgres, tier: data }
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres, tier: data }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 70        # the "postgres" user in the alpine image
+        runAsGroup: 70
+        fsGroup: 70
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          env:
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: campuspass-secrets, key: POSTGRES_PASSWORD } }
+            - name: AUTH_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: campuspass-secrets, key: AUTH_DB_PASSWORD } }
+            - name: BOOKING_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: campuspass-secrets, key: BOOKING_DB_PASSWORD } }
+            - name: TICKET_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: campuspass-secrets, key: TICKET_DB_PASSWORD } }
+          args: ["-c", "max_connections=200"]
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres"] }
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "postgres"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+            - { name: run, mountPath: /var/run/postgresql }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: init
+          configMap: { name: postgres-init, defaultMode: 0555 }
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: { storage: 5Gi }
+---
+# ------------------------------------------------------------------ MongoDB
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  labels: { app: mongo }
+spec:
+  clusterIP: None
+  selector: { app: mongo }
+  ports:
+    - { name: mongo, port: 27017, targetPort: 27017 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+  labels: { app: mongo, tier: data }
+spec:
+  serviceName: mongo
+  replicas: 1
+  selector:
+    matchLabels: { app: mongo }
+  template:
+    metadata:
+      labels: { app: mongo, tier: data }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: mongo
+          image: mongo:7
+          args: ["--wiredTigerCacheSizeGB", "0.25", "--bind_ip_all"]
+          ports:
+            - { name: mongo, containerPort: 27017 }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          readinessProbe:
+            tcpSocket: { port: 27017 }
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"] }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /data/db }
+            - { name: configdb, mountPath: /data/configdb }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: configdb
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: { storage: 5Gi }
+---
+# ------------------------------------------------------------------ Redis
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels: { app: redis }
+spec:
+  selector: { app: redis }
+  ports:
+    - { name: redis, port: 6379, targetPort: 6379 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  labels: { app: redis, tier: data }
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis, tier: data }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          # appendonly = durable seat counters; noeviction = never silently drop a counter.
+          args: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+          ports:
+            - { name: redis, containerPort: 6379 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 384Mi }
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 6379 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: { storage: 1Gi }

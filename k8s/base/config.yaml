@@ -1,0 +1,13 @@
+# Non-secret settings shared by the services. Secrets live in the "campuspass-secrets" Secret,
+# which is created by scripts/bootstrap.ps1 (prod) or the local overlay (Minikube), never committed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: campuspass-config
+data:
+  EVENT_SERVICE_URL: http://event-service:8081
+  TICKET_SERVICE_URL: http://ticket-service:8000
+  REDIS_URL: redis://redis:6379
+  MONGODB_URI: mongodb://mongo:27017/events
+  LOG_LEVEL: info
+  SEED_DEMO: "true"

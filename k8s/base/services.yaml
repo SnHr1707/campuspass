@@ -1,0 +1,295 @@
+# The four business microservices. Each one:
+#  - runs as a non-root user with a read-only filesystem and no Linux capabilities
+#  - exposes /health for probes and /metrics for Prometheus (see the annotations)
+#  - gets only the secrets it needs
+#  - is reached by other services through its Service name (service discovery via cluster DNS)
+
+# ------------------------------------------------------------------ auth-service
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  labels: { app: auth-service }
+spec:
+  selector: { app: auth-service }
+  ports:
+    - { name: http, port: 3001, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  labels: { app: auth-service, tier: backend }
+spec:
+  # No "replicas": the HorizontalPodAutoscaler owns the pod count.
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: auth-service }
+  template:
+    metadata:
+      labels: { app: auth-service, tier: backend }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3001"
+        prometheus.io/path: /metrics
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: auth-service
+          image: campuspass/auth-service
+          ports:
+            - { name: http, containerPort: 3001 }
+          envFrom:
+            - configMapRef: { name: campuspass-config }
+          env:
+            - name: AUTH_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: campuspass-secrets, key: AUTH_DB_PASSWORD } }
+            - name: DATABASE_URL
+              value: postgres://auth:$(AUTH_DB_PASSWORD)@postgres:5432/auth_db
+            - name: JWT_SECRET
+              valueFrom: { secretKeyRef: { name: campuspass-secrets, key: JWT_SECRET } }
+            - name: ORGANISER_INVITE_CODE
+              valueFrom: { secretKeyRef: { name: campuspass-secrets, key: ORGANISER_INVITE_CODE } }
+            - name: VOLUNTEER_INVITE_CODE
+              valueFrom: { secretKeyRef: { name: campuspass-secrets, key: VOLUNTEER_INVITE_CODE } }
+          resources:
+            requests: { cpu: 100m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 4
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ------------------------------------------------------------------ event-service
+apiVersion: v1
+kind: Service
+metadata:
+  name: event-service
+  labels: { app: event-service }
+spec:
+  selector: { app: event-service }
+  ports:
+    - { name: http, port: 8081, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-service
+  labels: { app: event-service, tier: backend }
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: event-service }
+  template:
+    metadata:
+      labels: { app: event-service, tier: backend }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+        prometheus.io/path: /metrics
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: event-service
+          image: campuspass/event-service
+          ports:
+            - { name: http, containerPort: 8081 }
+          envFrom:
+            - configMapRef: { name: campuspass-config }
+          resources:
+            requests: { cpu: 200m, memory: 384Mi }
+            limits: { cpu: "1", memory: 768Mi }
+          # The JVM needs time to start; the startup probe keeps liveness from killing it early.
+          startupProbe:
+            httpGet: { path: /health/liveness, port: http }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /health/readiness, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health/liveness, port: http }
+            periodSeconds: 15
+            failureThreshold: 4
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ------------------------------------------------------------------ booking-service
+apiVersion: v1
+kind: Service
+metadata:
+  name: booking-service
+  labels: { app: booking-service }
+spec:
+  selector: { app: booking-service }
+  ports:
+    - { name: http, port: 3002, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: booking-service
+  labels: { app: booking-service, tier: backend }
+spec:
+  # No "replicas": the HorizontalPodAutoscaler scales this from 1 to 5 during a rush.
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: booking-service }
+  template:
+    metadata:
+      labels: { app: booking-service, tier: backend }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3002"
+        prometheus.io/path: /metrics
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: booking-service
+          image: campuspass/booking-service
+          ports:
+            - { name: http, containerPort: 3002 }
+          envFrom:
+            - configMapRef: { name: campuspass-config }
+          env:
+            - name: BOOKING_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: campuspass-secrets, key: BOOKING_DB_PASSWORD } }
+            - name: DATABASE_URL
+              value: postgres://booking:$(BOOKING_DB_PASSWORD)@postgres:5432/booking_db
+          resources:
+            requests: { cpu: 100m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 4
+          # Stop receiving traffic before shutting down, so in-flight bookings finish.
+          lifecycle:
+            preStop:
+              exec: { command: ["sleep", "5"] }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# ------------------------------------------------------------------ ticket-service
+apiVersion: v1
+kind: Service
+metadata:
+  name: ticket-service
+  labels: { app: ticket-service }
+spec:
+  selector: { app: ticket-service }
+  ports:
+    - { name: http, port: 8000, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticket-service
+  labels: { app: ticket-service, tier: backend }
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: ticket-service }
+  template:
+    metadata:
+      labels: { app: ticket-service, tier: backend }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: ticket-service
+          image: campuspass/ticket-service
+          ports:
+            - { name: http, containerPort: 8000 }
+          env:
+            - name: TICKET_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: campuspass-secrets, key: TICKET_DB_PASSWORD } }
+            - name: DATABASE_URL
+              value: postgresql+psycopg://ticket:$(TICKET_DB_PASSWORD)@postgres:5432/ticket_db
+            - name: TICKET_SIGNING_SECRET
+              valueFrom: { secretKeyRef: { name: campuspass-secrets, key: TICKET_SIGNING_SECRET } }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 384Mi }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 4
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

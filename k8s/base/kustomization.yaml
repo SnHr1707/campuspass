@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: campuspass
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: campuspass
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - config.yaml
+  - datastores.yaml
+  - services.yaml
+  - edge.yaml
+  - scaling.yaml
+  - network-policies.yaml
