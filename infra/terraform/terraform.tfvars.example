@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. See docs/SETUP-ORACLE.md for where each value comes from.
+tenancy_ocid        = "ocid1.tenancy.oc1..aaaa..."
+user_ocid           = "ocid1.user.oc1..aaaa..."
+fingerprint         = "12:34:56:78:9a:bc:de:f0:12:34:56:78:9a:bc:de:f0"
+private_key_path    = "C:/Users/YourName/.oci/oci_api_key.pem"
+region              = "ap-mumbai-1"
+ssh_public_key_path = "C:/Users/YourName/.ssh/id_ed25519.pub"
+admin_cidr          = "203.0.113.7/32" # your public IP + /32 (search "what is my ip")
+duckdns_subdomain   = "campuspass"
+duckdns_token       = "00000000-0000-0000-0000-000000000000"
