@@ -41,9 +41,9 @@ variable "duckdns_token" {
 
 # ---- Machine and cost ----
 variable "instance_type" {
-  description = "EC2 instance type. t4g.large = 2 ARM vCPUs, 8 GB RAM (about $33/month in Mumbai)."
+  description = "EC2 instance type, 2 vCPUs and 8 GB RAM recommended. Free plan accounts: m7i-flex.large (Intel). Paid plan: t4g.large (ARM, cheaper)."
   type        = string
-  default     = "t4g.large"
+  default     = "m7i-flex.large"
 }
 
 variable "root_volume_gbs" {
