@@ -10,3 +10,9 @@ misconfigurations:
     statement: >-
       False positive. The ConfigMap holds a Grafana dashboard definition (panel titles and
       PromQL queries); it contains no credentials.
+  - id: AWS-0104
+    paths: ["infra/terraform/main.tf", "main.tf"]   # matches both the repo-root scan and the infra-only scan
+    statement: >-
+      Accepted risk. The k3s server must reach the internet on many hosts and ports to pull container
+      images, Helm charts, OS packages and Let's Encrypt certificates. Inbound access is what is
+      restricted: only 80/443 are public, and SSH/Kubernetes API are limited to the admin's IP.

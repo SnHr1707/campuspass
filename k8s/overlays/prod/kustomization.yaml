@@ -1,4 +1,4 @@
-# Production on the Oracle Cloud k3s VM. Argo CD deploys this folder from the "gitops" branch;
+# Production on the AWS EC2 k3s server. Argo CD deploys this folder from the "gitops" branch;
 # the CI pipeline updates the image tags below on that branch after every successful build.
 #
 # Before the first deploy, set YOUR domain in ingress-patch.yaml (two places).
@@ -8,12 +8,12 @@ resources:
   - ../../base
   - cluster-issuer.yaml
 images:
-  - {name: campuspass/auth-service, newName: ghcr.io/snhr1707/campuspass-auth-service, newTag: sha-27b76e4}
-  - {name: campuspass/event-service, newName: ghcr.io/snhr1707/campuspass-event-service, newTag: sha-27b76e4}
-  - {name: campuspass/booking-service, newName: ghcr.io/snhr1707/campuspass-booking-service, newTag: sha-27b76e4}
-  - {name: campuspass/ticket-service, newName: ghcr.io/snhr1707/campuspass-ticket-service, newTag: sha-27b76e4}
-  - {name: campuspass/api-gateway, newName: ghcr.io/snhr1707/campuspass-api-gateway, newTag: sha-27b76e4}
-  - {name: campuspass/frontend, newName: ghcr.io/snhr1707/campuspass-frontend, newTag: sha-27b76e4}
+  - {name: campuspass/auth-service, newName: ghcr.io/snhr1707/campuspass-auth-service, newTag: sha-62c929a}
+  - {name: campuspass/event-service, newName: ghcr.io/snhr1707/campuspass-event-service, newTag: sha-62c929a}
+  - {name: campuspass/booking-service, newName: ghcr.io/snhr1707/campuspass-booking-service, newTag: sha-62c929a}
+  - {name: campuspass/ticket-service, newName: ghcr.io/snhr1707/campuspass-ticket-service, newTag: sha-62c929a}
+  - {name: campuspass/api-gateway, newName: ghcr.io/snhr1707/campuspass-api-gateway, newTag: sha-62c929a}
+  - {name: campuspass/frontend, newName: ghcr.io/snhr1707/campuspass-frontend, newTag: sha-62c929a}
 patches:
   - path: ingress-patch.yaml
     target: {kind: Ingress, name: campuspass}

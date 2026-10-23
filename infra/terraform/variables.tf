@@ -1,38 +1,19 @@
-# ---- Oracle Cloud API credentials (from the API key you create in the console) ----
-variable "tenancy_ocid" {
-  description = "OCID of your tenancy (Profile > Tenancy)."
-  type        = string
-}
-
-variable "user_ocid" {
-  description = "OCID of your user (Profile > My profile)."
-  type        = string
-}
-
-variable "fingerprint" {
-  description = "Fingerprint of the API signing key you uploaded."
-  type        = string
-}
-
-variable "private_key_path" {
-  description = "Path to the API signing private key (.pem) on your laptop."
-  type        = string
-}
-
+# ---- AWS account ----
 variable "region" {
-  description = "Your home region, e.g. ap-mumbai-1 or ap-hyderabad-1."
+  description = "AWS region. ap-south-1 is Mumbai."
   type        = string
+  default     = "ap-south-1"
 }
 
-variable "compartment_ocid" {
-  description = "Compartment to create resources in. Leave empty to use the tenancy root."
+variable "aws_profile" {
+  description = "AWS CLI profile holding the access key (created with: aws configure --profile campuspass)."
   type        = string
-  default     = ""
+  default     = "campuspass"
 }
 
 # ---- Access ----
 variable "ssh_public_key_path" {
-  description = "Public SSH key that may log in to the VM (e.g. C:/Users/you/.ssh/id_ed25519.pub)."
+  description = "Public SSH key that may log in to the server (e.g. C:/Users/you/.ssh/id_ed25519.pub)."
   type        = string
 }
 
@@ -53,34 +34,33 @@ variable "duckdns_subdomain" {
 }
 
 variable "duckdns_token" {
-  description = "DuckDNS token, used by the VM to keep the domain pointed at its IP."
+  description = "DuckDNS token, used by the server to keep the domain pointed at its IP."
   type        = string
   sensitive   = true
 }
 
-# ---- Machine size (Always Free allows up to 4 OCPUs and 24 GB on Ampere A1) ----
-variable "ocpus" {
-  description = "Ampere A1 OCPUs (Always Free limit: 4 in total)."
-  type        = number
-  default     = 4
+# ---- Machine and cost ----
+variable "instance_type" {
+  description = "EC2 instance type. t4g.large = 2 ARM vCPUs, 8 GB RAM (about $33/month in Mumbai)."
+  type        = string
+  default     = "t4g.large"
 }
 
-variable "memory_gbs" {
-  description = "Memory in GB (Always Free limit: 24 in total)."
+variable "root_volume_gbs" {
+  description = "Disk size in GB (gp3, encrypted)."
   type        = number
-  default     = 24
+  default     = 40
 }
 
-variable "boot_volume_gbs" {
-  description = "Boot disk size in GB (Always Free includes 200 GB of block storage)."
+variable "monthly_budget_usd" {
+  description = "Monthly spending limit for the budget alert, in US dollars."
   type        = number
-  default     = 100
+  default     = 50
 }
 
-variable "availability_domain_number" {
-  description = "Which availability domain to use (1, 2 or 3). Try another if you see \"Out of host capacity\"."
-  type        = number
-  default     = 1
+variable "alert_email" {
+  description = "Email address that receives the budget alerts."
+  type        = string
 }
 
 variable "git_repo_url" {

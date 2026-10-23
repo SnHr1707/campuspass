@@ -19,7 +19,7 @@ Built for **4CS505ME25 Cloud Native Applications and DevOps** (B.Tech CSE, Sem V
 ```mermaid
 flowchart TB
     U[Students, organisers, volunteers] -->|HTTPS| I[Traefik Ingress + cert-manager TLS]
-    subgraph k3s["k3s cluster on an Oracle Cloud Always Free Ampere A1 VM"]
+    subgraph k3s["k3s cluster on an AWS EC2 t4g.large (ARM Graviton) server"]
         I -->|/| FE[frontend<br/>React + NGINX]
         I -->|/api| GW[api-gateway<br/>NGINX: JWT check, rate limits]
         GW --> AUTH[auth-service<br/>Node.js]
@@ -74,7 +74,7 @@ docker compose up --build
 
 **On Kubernetes locally (Minikube):** `.\scripts\local-k8s.ps1`
 
-**On Oracle Cloud with a public link:** follow [docs/DEPLOY.md](docs/DEPLOY.md).
+**On AWS with a public link:** follow [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## DevOps practices
 
@@ -82,7 +82,7 @@ docker compose up --build
 |---|---|---|
 | Microservices | 6 services, 3 languages, database per service, API gateway, service discovery by DNS | `services/` |
 | Docker | Multi-stage builds, non-root users, read-only root filesystem, healthchecks, `.dockerignore`, multi-arch (amd64 + arm64), Spring Boot layered jars, Compose with healthcheck ordering | `services/*/Dockerfile`, `docker-compose.yml` |
-| Infrastructure as Code | Terraform (Oracle VCN, subnet, security list, A1 VM) + cloud-init (k3s, cert-manager, monitoring, Argo CD) | `infra/terraform/` |
+| Infrastructure as Code | Terraform (AWS VPC, subnet, security group, EC2 with Elastic IP, budget alert) + cloud-init (k3s, cert-manager, monitoring, Argo CD) | `infra/terraform/` |
 | Kubernetes | Kustomize base + overlays, Deployments, StatefulSets with PVCs, ConfigMaps, Secrets, probes, HPA, PDB, NetworkPolicies, Ingress with TLS, rolling updates | `k8s/` |
 | CI/CD | GitHub Actions: scans, tests, image build, e2e test with load test, GitOps deploy, live verification | `.github/workflows/` |
 | GitOps | Argo CD syncs `k8s/overlays/prod` from the `gitops` branch; CI never holds cluster credentials | `platform/argocd/` |
@@ -112,8 +112,8 @@ attackers rewrote most `aquasecurity/trivy-action` tags and published malicious 
 ```text
 services/            six microservices, each with its own Dockerfile and tests
 docker-compose.yml   the whole system on one machine
-k8s/                 Kustomize base + local (Minikube) and prod (Oracle) overlays
-infra/terraform/     Oracle Cloud network, VM and cloud-init
+k8s/                 Kustomize base + local (Minikube) and prod (AWS) overlays
+infra/terraform/     AWS network, EC2 server, budget alert and cloud-init
 platform/argocd/     Argo CD applications (GitOps)
 monitoring/          Helm values, Grafana dashboard, alert rules
 load-tests/          k6 registration-rush test

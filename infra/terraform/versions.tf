@@ -2,20 +2,25 @@ terraform {
   required_version = ">= 1.6.0"
 
   required_providers {
-    oci = {
-      source  = "oracle/oci"
-      version = "~> 7.0"
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
     }
   }
 
   # State is kept in a local, git-ignored file. For a team you would move it to an
-  # OCI Object Storage bucket (S3-compatible backend) so everyone shares one state.
+  # S3 bucket (with locking) so everyone shares one state.
 }
 
-provider "oci" {
-  tenancy_ocid     = var.tenancy_ocid
-  user_ocid        = var.user_ocid
-  fingerprint      = var.fingerprint
-  private_key_path = var.private_key_path
-  region           = var.region
+provider "aws" {
+  region  = var.region
+  profile = var.aws_profile
+
+  # Every resource gets these tags, so the project's cost is easy to find in the billing console.
+  default_tags {
+    tags = {
+      project    = "campuspass"
+      managed_by = "terraform"
+    }
+  }
 }

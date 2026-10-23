@@ -29,6 +29,8 @@ jobs:
           terraform validate
       - name: Security scan (Trivy)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        env:
+          TRIVY_IGNOREFILE: ${{ github.workspace }}/trivyignore.yaml   # reviewed exceptions, each with a reason
         with:
           version: v0.69.3
           scan-type: config

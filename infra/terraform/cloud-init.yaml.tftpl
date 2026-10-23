@@ -1,9 +1,6 @@
 #cloud-config
-# First-boot setup for the CampusPass k3s server (rendered by Terraform's templatefile()).
-# Progress is logged to /var/log/campuspass-bootstrap.log on the VM.
-
-package_update: true
-packages: [curl, git, jq, iptables-persistent, ca-certificates]
+# First-boot setup for the CampusPass k3s server on AWS (rendered by Terraform's templatefile()).
+# Progress is logged to /var/log/campuspass-bootstrap.log on the server.
 
 write_files:
   # Keep the DuckDNS name pointed at this VM, even if its IP ever changes.
@@ -11,7 +8,7 @@ write_files:
     permissions: "0700"
     content: |
       #!/bin/sh
-      curl -fsS "https://www.duckdns.org/update?domains=${duckdns_subdomain}&token=${duckdns_token}&ip=" -o /var/log/duckdns.last
+      curl -fsS "https://www.duckdns.org/update?domains=${duckdns_subdomain}&token=${duckdns_token}&ip=${public_ip}" -o /var/log/duckdns.last
   - path: /etc/cron.d/duckdns
     permissions: "0644"
     content: |
@@ -63,20 +60,23 @@ write_files:
       LOKI_CHART_VERSION="6.55.0"
       ALLOY_CHART_VERSION="1.13.1"
 
-      # 1. Host firewall. Oracle's Ubuntu images ship iptables rules that REJECT everything
-      #    except SSH, including traffic between Kubernetes pods. The OCI security list
-      #    (managed by Terraform) is the real firewall, so remove those REJECT rules.
-      iptables -D INPUT -j REJECT --reject-with icmp-host-prohibited || true
-      iptables -D FORWARD -j REJECT --reject-with icmp-host-prohibited || true
-      netfilter-persistent save
+      # 1. Wait until the Elastic IP is attached and the internet is reachable.
+      #    (Terraform attaches it a few seconds after the server starts.)
+      for i in $(seq 1 60); do
+        [ "$(curl -fsS --max-time 5 https://checkip.amazonaws.com || true)" = "${public_ip}" ] && break
+        sleep 5
+      done
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -q
+      apt-get install -y -q curl git jq ca-certificates
 
-      # 2. Point the domain at this VM right away.
+      # 2. Point the domain at this server right away. (The AWS security group, managed by
+      #    Terraform, is the firewall; the Ubuntu image has no host firewall rules to change.)
       /usr/local/bin/duckdns-update.sh || true
 
       # 3. k3s (lightweight Kubernetes). Secrets are encrypted at rest in its datastore.
-      PUBLIC_IP=$(curl -fsS https://checkip.amazonaws.com)
       curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -s - server \
-        --tls-san "$PUBLIC_IP" --tls-san "${domain}" \
+        --tls-san "${public_ip}" --tls-san "${domain}" \
         --write-kubeconfig-mode 600 \
         --secrets-encryption
       export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
