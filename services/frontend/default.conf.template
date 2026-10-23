@@ -1,0 +1,52 @@
+# Serves the built React app. /api is forwarded to the API gateway, so the browser
+# only ever talks to one origin (no CORS needed). In Kubernetes the Ingress sends /api
+# straight to the gateway, so that block is only used by docker compose.
+
+upstream gateway {
+    server ${GATEWAY_UPSTREAM};
+    keepalive 64;
+}
+
+server {
+    listen 8080;
+    server_name _;
+    server_tokens off;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header Permissions-Policy "camera=(self), microphone=(), geolocation=()" always;
+    add_header Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    location /api/ {
+        proxy_pass http://gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Request-Id $request_id;
+    }
+
+    # Hashed build files never change, so browsers can cache them for a year.
+    location /assets/ {
+        expires 1y;
+        try_files $uri =404;
+    }
+
+    location = /health {
+        access_log off;
+        default_type application/json;
+        return 200 '{"status":"ok","service":"frontend"}';
+    }
+
+    # Single-page app: unknown paths load index.html and React Router takes over.
+    # expires (not add_header) is used for caching so the security headers above are inherited.
+    location / {
+        expires -1;
+        try_files $uri $uri/ /index.html;
+    }
+}

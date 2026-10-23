@@ -1,0 +1,17 @@
+# Public HTTPS on your DuckDNS domain. cert-manager sees the annotation and fetches
+# a free Let's Encrypt certificate into the "campuspass-tls" Secret automatically.
+- op: add
+  path: /metadata/annotations
+  value:
+    cert-manager.io/cluster-issuer: letsencrypt
+- op: add
+  path: /spec/ingressClassName
+  value: traefik
+- op: replace
+  path: /spec/rules/0/host
+  value: campuspass.duckdns.org          # <-- your DuckDNS domain
+- op: add
+  path: /spec/tls
+  value:
+    - hosts: [campuspass.duckdns.org]    # <-- same domain
+      secretName: campuspass-tls

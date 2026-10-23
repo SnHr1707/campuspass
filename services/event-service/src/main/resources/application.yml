@@ -1,0 +1,53 @@
+server:
+  port: ${PORT:8081}
+  shutdown: graceful
+
+spring:
+  application:
+    name: event-service
+  lifecycle:
+    timeout-per-shutdown-phase: 10s
+  mongodb:
+    uri: ${MONGODB_URI:mongodb://localhost:27017/events}
+  data:
+    mongodb:
+      auto-index-creation: true
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+      timeout: 500ms
+  # Cached event lists expire after 30 seconds, so new events show up quickly.
+  cache:
+    type: ${CACHE_TYPE:redis}
+    redis:
+      time-to-live: 30s
+      key-prefix: "event-service:"
+
+campuspass:
+  seed-demo: ${SEED_DEMO:false}
+
+# Health at /health (with /health/liveness and /health/readiness for Kubernetes probes)
+# and Prometheus metrics at /metrics, the same paths every CampusPass service uses.
+management:
+  endpoints:
+    web:
+      base-path: /
+      exposure:
+        include: health,prometheus
+      path-mapping:
+        prometheus: metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,mongo
+  health:
+    redis:
+      enabled: false
+  metrics:
+    tags:
+      service: event-service
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true

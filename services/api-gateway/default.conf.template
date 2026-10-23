@@ -1,0 +1,179 @@
+# CampusPass API gateway (NGINX).
+# Single entry point for /api: verifies the JWT once (via auth-service), rate-limits,
+# adds a request ID for tracing, and routes to the right microservice.
+# ${...} placeholders are filled from environment variables when the container starts.
+
+upstream auth-svc    { server ${AUTH_UPSTREAM};    keepalive 32; }
+upstream event-svc   { server ${EVENT_UPSTREAM};   keepalive 32; }
+upstream booking-svc { server ${BOOKING_UPSTREAM}; keepalive 64; }
+upstream ticket-svc  { server ${TICKET_UPSTREAM};  keepalive 32; }
+
+# Trust X-Forwarded-For only from private networks (the Ingress / Docker network).
+set_real_ip_from 10.0.0.0/8;
+set_real_ip_from 172.16.0.0/12;
+set_real_ip_from 192.168.0.0/16;
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+
+# Reuse the caller's request ID if it sent one, otherwise generate one.
+map $http_x_request_id $req_id {
+    default $http_x_request_id;
+    ""      $request_id;
+}
+
+# Rate limits: per client IP for everything, and per login token for booking,
+# so one account cannot hammer the booking endpoint with a script.
+# Traffic from private addresses (the in-cluster load test, health checks) is not limited
+# per IP; real visitors arrive through the Ingress with their public IP restored above.
+geo $is_internal {
+    default        0;
+    10.0.0.0/8     1;
+    172.16.0.0/12  1;
+    192.168.0.0/16 1;
+    127.0.0.0/8    1;
+}
+map $is_internal $per_ip_key {
+    1       "";                     # empty key = not counted by limit_req
+    default $binary_remote_addr;
+}
+limit_req_zone $per_ip_key          zone=per_ip:10m    rate=${RATE_LIMIT_PER_IP};
+limit_req_zone $per_ip_key          zone=auth_ip:10m   rate=${RATE_LIMIT_AUTH};
+limit_req_zone $http_authorization  zone=per_token:10m rate=${RATE_LIMIT_BOOKING};
+limit_req_status 429;
+
+log_format json escape=json '{"time":"$time_iso8601","service":"api-gateway","request_id":"$req_id",'
+    '"client":"$remote_addr","method":"$request_method","uri":"$uri","status":$status,'
+    '"duration":$request_time,"upstream":"$upstream_addr","user":"$user_id"}';
+
+server {
+    listen 8080;
+    server_name _;
+    server_tokens off;
+    access_log /dev/stdout json;
+    client_max_body_size 16k;
+    default_type application/json;
+
+    add_header X-Request-Id $req_id always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header X-Request-Id $req_id;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_connect_timeout 2s;
+    proxy_read_timeout 15s;
+
+    # Identity set by auth_request. These overwrite anything a client sends with the same name,
+    # so X-User-* headers can never be forged from outside.
+    set $user_id "";
+    set $user_role "";
+    set $user_name "";
+    proxy_set_header X-User-Id   $user_id;
+    proxy_set_header X-User-Role $user_role;
+    proxy_set_header X-User-Name $user_name;
+
+    limit_req zone=per_ip burst=${RATE_BURST_PER_IP} nodelay;
+
+    error_page 401 = @unauthorized;
+    error_page 403 = @forbidden;
+    error_page 429 = @too_many;
+    error_page 502 503 504 = @unavailable;
+
+    # ---- internal JWT checks -------------------------------------------------
+    location = /_auth {
+        internal;
+        proxy_pass http://auth-svc/verify;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Connection "";
+        proxy_set_header X-Request-Id $req_id;
+    }
+
+    location = /_auth_optional {
+        internal;
+        proxy_pass http://auth-svc/verify?optional=1;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Connection "";
+        proxy_set_header X-Request-Id $req_id;
+    }
+
+    # ---- auth-service (public) -----------------------------------------------
+    location = /api/auth/verify { return 404 '{"error":"Not found"}'; }
+
+    location /api/auth/ {
+        limit_req zone=auth_ip burst=${RATE_BURST_AUTH} nodelay;
+        proxy_pass http://auth-svc/;
+    }
+
+    # ---- event-service: browsing is public, creating needs a login -----------
+    location /api/events {
+        auth_request /_auth_optional;
+        auth_request_set $user_id   $upstream_http_x_user_id;
+        auth_request_set $user_role $upstream_http_x_user_role;
+        auth_request_set $user_name $upstream_http_x_user_name;
+        rewrite ^/api(/.*)$ $1 break;
+        proxy_pass http://event-svc;
+    }
+
+    # ---- booking-service -----------------------------------------------------
+    location = /api/bookings/availability {
+        rewrite ^/api(/.*)$ $1 break;
+        proxy_pass http://booking-svc;
+    }
+
+    location = /api/bookings {
+        limit_req zone=per_token burst=${RATE_BURST_BOOKING} nodelay;
+        auth_request /_auth;
+        auth_request_set $user_id   $upstream_http_x_user_id;
+        auth_request_set $user_role $upstream_http_x_user_role;
+        auth_request_set $user_name $upstream_http_x_user_name;
+        rewrite ^/api(/.*)$ $1 break;
+        proxy_pass http://booking-svc;
+    }
+
+    location /api/bookings/ {
+        auth_request /_auth;
+        auth_request_set $user_id   $upstream_http_x_user_id;
+        auth_request_set $user_role $upstream_http_x_user_role;
+        auth_request_set $user_name $upstream_http_x_user_name;
+        rewrite ^/api(/.*)$ $1 break;
+        proxy_pass http://booking-svc;
+    }
+
+    # ---- ticket-service (its /internal routes are never exposed) ------------
+    location /api/tickets/ {
+        auth_request /_auth;
+        auth_request_set $user_id   $upstream_http_x_user_id;
+        auth_request_set $user_role $upstream_http_x_user_role;
+        auth_request_set $user_name $upstream_http_x_user_name;
+        rewrite ^/api(/.*)$ $1 break;
+        proxy_pass http://ticket-svc;
+    }
+
+    # ---- gateway's own endpoints ---------------------------------------------
+    location = /health {
+        access_log off;
+        return 200 '{"status":"ok","service":"api-gateway"}';
+    }
+
+    location = /nginx_status {
+        stub_status;
+        access_log off;
+        allow 127.0.0.1;
+        allow 10.0.0.0/8;
+        allow 172.16.0.0/12;
+        deny all;
+    }
+
+    location / { return 404 '{"error":"Not found"}'; }
+
+    location @unauthorized { return 401 '{"error":"Login required or session expired"}'; }
+    location @forbidden    { return 403 '{"error":"Forbidden"}'; }
+    location @too_many     { return 429 '{"error":"Too many requests, slow down"}'; }
+    location @unavailable  { return 503 '{"error":"Service temporarily unavailable"}'; }
+}

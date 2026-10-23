@@ -1,0 +1,118 @@
+# Zero-trust networking inside the namespace: everything is blocked unless allowed below.
+# This is also what makes the gateway's X-User-* headers trustworthy: only the gateway
+# can reach the services, so nobody else can send forged identity headers.
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+# Ingress controllers (Traefik on k3s, ingress-nginx on Minikube) may reach the edge pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-controller-to-edge
+spec:
+  podSelector:
+    matchLabels: { tier: edge }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: ["kube-system", "ingress-nginx"]
+---
+# The gateway also accepts traffic from the frontend pods and from the k6 rush-test Job.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-gateway
+spec:
+  podSelector:
+    matchLabels: { app: api-gateway }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: frontend } }
+        - podSelector: { matchLabels: { app: k6-rush } }
+---
+# Business services: reachable from the gateway, and (for metrics) from the monitoring namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-services
+spec:
+  podSelector:
+    matchLabels: { tier: backend }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: api-gateway } }
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: monitoring }
+---
+# booking-service calls event-service (event details) and ticket-service (issue tickets).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-booking-to-event-and-ticket
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app, operator: In, values: ["event-service", "ticket-service"] }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: booking-service } }
+---
+# Each database only accepts its own services.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-access
+spec:
+  podSelector:
+    matchLabels: { app: postgres }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app, operator: In, values: ["auth-service", "booking-service", "ticket-service"] }
+      ports:
+        - { port: 5432, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mongo-access
+spec:
+  podSelector:
+    matchLabels: { app: mongo }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: event-service } }
+      ports:
+        - { port: 27017, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-access
+spec:
+  podSelector:
+    matchLabels: { app: redis }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app, operator: In, values: ["booking-service", "event-service"] }
+      ports:
+        - { port: 6379, protocol: TCP }

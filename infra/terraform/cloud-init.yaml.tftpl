@@ -1,0 +1,130 @@
+#cloud-config
+# First-boot setup for the CampusPass k3s server (rendered by Terraform's templatefile()).
+# Progress is logged to /var/log/campuspass-bootstrap.log on the VM.
+
+package_update: true
+packages: [curl, git, jq, iptables-persistent, ca-certificates]
+
+write_files:
+  # Keep the DuckDNS name pointed at this VM, even if its IP ever changes.
+  - path: /usr/local/bin/duckdns-update.sh
+    permissions: "0700"
+    content: |
+      #!/bin/sh
+      curl -fsS "https://www.duckdns.org/update?domains=${duckdns_subdomain}&token=${duckdns_token}&ip=" -o /var/log/duckdns.last
+  - path: /etc/cron.d/duckdns
+    permissions: "0644"
+    content: |
+      */5 * * * * root /usr/local/bin/duckdns-update.sh
+
+  # k3s applies anything in this folder. Keep the visitor's real IP at Traefik so the
+  # gateway's per-IP rate limits work.
+  - path: /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+    permissions: "0600"
+    content: |
+      apiVersion: helm.cattle.io/v1
+      kind: HelmChartConfig
+      metadata:
+        name: traefik
+        namespace: kube-system
+      spec:
+        valuesContent: |-
+          service:
+            spec:
+              externalTrafficPolicy: Local
+
+  # Grafana is served at https://<domain>/grafana.
+  - path: /etc/campuspass/grafana-domain.yaml
+    permissions: "0600"
+    content: |
+      grafana:
+        grafana.ini:
+          server:
+            domain: ${domain}
+        ingress:
+          hosts: [${domain}]
+          tls:
+            - secretName: grafana-tls
+              hosts: [${domain}]
+
+  - path: /usr/local/bin/campuspass-bootstrap.sh
+    permissions: "0700"
+    content: |
+      #!/bin/bash
+      set -euxo pipefail
+      exec > /var/log/campuspass-bootstrap.log 2>&1
+
+      # Pinned versions (checked October 2026).
+      K3S_VERSION="v1.35.9+k3s1"
+      HELM_VERSION="v3.22.0"
+      CERT_MANAGER_VERSION="v1.21.2"
+      ARGOCD_VERSION="v3.5.4"
+      KPS_CHART_VERSION="92.3.0"
+      LOKI_CHART_VERSION="6.55.0"
+      ALLOY_CHART_VERSION="1.13.1"
+
+      # 1. Host firewall. Oracle's Ubuntu images ship iptables rules that REJECT everything
+      #    except SSH, including traffic between Kubernetes pods. The OCI security list
+      #    (managed by Terraform) is the real firewall, so remove those REJECT rules.
+      iptables -D INPUT -j REJECT --reject-with icmp-host-prohibited || true
+      iptables -D FORWARD -j REJECT --reject-with icmp-host-prohibited || true
+      netfilter-persistent save
+
+      # 2. Point the domain at this VM right away.
+      /usr/local/bin/duckdns-update.sh || true
+
+      # 3. k3s (lightweight Kubernetes). Secrets are encrypted at rest in its datastore.
+      PUBLIC_IP=$(curl -fsS https://checkip.amazonaws.com)
+      curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -s - server \
+        --tls-san "$PUBLIC_IP" --tls-san "${domain}" \
+        --write-kubeconfig-mode 600 \
+        --secrets-encryption
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      until kubectl get nodes >/dev/null 2>&1; do sleep 5; done
+      kubectl wait --for=condition=Ready node --all --timeout=300s
+
+      # 4. Helm.
+      curl -fsSL "https://get.helm.sh/helm-$HELM_VERSION-linux-arm64.tar.gz" | tar xz -C /tmp
+      install -m 0755 /tmp/linux-arm64/helm /usr/local/bin/helm
+      helm repo add jetstack https://charts.jetstack.io
+      helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+      helm repo add grafana https://grafana.github.io/helm-charts
+      helm repo update
+
+      # 5. The repository (Helm values and Argo CD applications live in it).
+      git clone --depth 1 "${git_repo_url}" /opt/campuspass
+
+      # 6. cert-manager: free HTTPS certificates from Let's Encrypt.
+      helm upgrade --install cert-manager jetstack/cert-manager \
+        --version "$CERT_MANAGER_VERSION" --namespace cert-manager --create-namespace \
+        --set crds.enabled=true --wait --timeout 10m
+
+      # 7. Monitoring: Prometheus + Grafana, Loki for logs, Alloy to ship pod logs to Loki.
+      kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+      GRAFANA_PASSWORD=$(openssl rand -hex 16)
+      helm upgrade --install kps prometheus-community/kube-prometheus-stack \
+        --version "$KPS_CHART_VERSION" --namespace monitoring \
+        -f /opt/campuspass/monitoring/values/kube-prometheus-stack.yaml \
+        -f /etc/campuspass/grafana-domain.yaml \
+        --set grafana.adminPassword="$GRAFANA_PASSWORD" \
+        --wait --timeout 15m
+      helm upgrade --install loki grafana/loki \
+        --version "$LOKI_CHART_VERSION" --namespace monitoring \
+        -f /opt/campuspass/monitoring/values/loki.yaml --wait --timeout 10m
+      helm upgrade --install alloy grafana/alloy \
+        --version "$ALLOY_CHART_VERSION" --namespace monitoring \
+        -f /opt/campuspass/monitoring/values/alloy.yaml --wait --timeout 10m
+
+      # 8. Argo CD (GitOps). From here on the cluster deploys itself from Git.
+      kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+      kubectl apply -n argocd --server-side --force-conflicts \
+        -f "https://raw.githubusercontent.com/argoproj/argo-cd/$ARGOCD_VERSION/manifests/install.yaml"
+      kubectl -n argocd rollout status deployment/argocd-server --timeout=10m
+      kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=10m
+      kubectl apply -f /opt/campuspass/platform/argocd/applications.yaml
+
+      touch /var/lib/campuspass-bootstrap-done
+      echo "CampusPass platform ready. Next: run scripts/bootstrap.ps1 on your laptop."
+
+runcmd:
+  - [bash, /usr/local/bin/campuspass-bootstrap.sh]

@@ -1,0 +1,68 @@
+# Grafana's sidecar loads any ConfigMap labelled grafana_dashboard=1 as a dashboard.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: campuspass-rush-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: '1'
+data:
+  campuspass-rush.json: "{\n \"title\": \"CampusPass: Registration Rush\",\n \"uid\": \"campuspass-rush\",\n \"editable\": false,\n \"refresh\": \"5s\",\n \"time\": {\n  \"from\": \"now-15m\",\n  \"to\"\
+    : \"now\"\n },\n \"schemaVersion\": 39,\n \"tags\": [\n  \"campuspass\"\n ],\n \"panels\": [\n  {\n   \"id\": 1,\n   \"title\": \"Seats left per event\",\n   \"type\": \"stat\",\n   \"datasource\":\
+    \ {\n    \"type\": \"prometheus\",\n    \"uid\": \"prometheus\"\n   },\n   \"gridPos\": {\n    \"x\": 0,\n    \"y\": 0,\n    \"w\": 8,\n    \"h\": 6\n   },\n   \"targets\": [\n    {\n     \"refId\"\
+    : \"A\",\n     \"expr\": \"campuspass_seats_left\",\n     \"legendFormat\": \"{{event_id}}\",\n     \"datasource\": {\n      \"type\": \"prometheus\",\n      \"uid\": \"prometheus\"\n     }\n    }\n\
+    \   ],\n   \"fieldConfig\": {\n    \"defaults\": {},\n    \"overrides\": []\n   },\n   \"options\": {\n    \"reduceOptions\": {\n     \"calcs\": [\n      \"lastNotNull\"\n     ],\n     \"fields\": \"\
+    \",\n     \"values\": false\n    },\n    \"colorMode\": \"value\",\n    \"graphMode\": \"area\",\n    \"textMode\": \"value_and_name\"\n   },\n   \"description\": \"Live seat counter read from Redis.\
+    \ Exactly reaches 0, never below.\"\n  },\n  {\n   \"id\": 2,\n   \"title\": \"booking-service pods\",\n   \"type\": \"stat\",\n   \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"prometheus\"\
+    \n   },\n   \"gridPos\": {\n    \"x\": 8,\n    \"y\": 0,\n    \"w\": 8,\n    \"h\": 6\n   },\n   \"targets\": [\n    {\n     \"refId\": \"A\",\n     \"expr\": \"kube_deployment_status_replicas_available{namespace=\\\
+    \"campuspass\\\",deployment=\\\"booking-service\\\"}\",\n     \"legendFormat\": \"running\",\n     \"datasource\": {\n      \"type\": \"prometheus\",\n      \"uid\": \"prometheus\"\n     }\n    },\n\
+    \    {\n     \"refId\": \"B\",\n     \"expr\": \"kube_horizontalpodautoscaler_status_desired_replicas{namespace=\\\"campuspass\\\",horizontalpodautoscaler=\\\"booking-service\\\"}\",\n     \"legendFormat\"\
+    : \"wanted by HPA\",\n     \"datasource\": {\n      \"type\": \"prometheus\",\n      \"uid\": \"prometheus\"\n     }\n    }\n   ],\n   \"fieldConfig\": {\n    \"defaults\": {},\n    \"overrides\": []\n\
+    \   },\n   \"options\": {\n    \"reduceOptions\": {\n     \"calcs\": [\n      \"lastNotNull\"\n     ],\n     \"fields\": \"\",\n     \"values\": false\n    },\n    \"colorMode\": \"value\",\n    \"\
+    graphMode\": \"area\",\n    \"textMode\": \"value_and_name\"\n   },\n   \"description\": \"Autoscaling in action: the HPA adds pods when CPU passes 60%.\"\n  },\n  {\n   \"id\": 3,\n   \"title\": \"\
+    Server error rate\",\n   \"type\": \"stat\",\n   \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"prometheus\"\n   },\n   \"gridPos\": {\n    \"x\": 16,\n    \"y\": 0,\n    \"w\": 8,\n\
+    \    \"h\": 6\n   },\n   \"targets\": [\n    {\n     \"refId\": \"A\",\n     \"expr\": \"(sum(rate(http_request_duration_seconds_count{namespace=\\\"campuspass\\\",status=~\\\"5..\\\"}[1m])) or vector(0))\
+    \ / clamp_min(sum(rate(http_request_duration_seconds_count{namespace=\\\"campuspass\\\"}[1m])), 0.001)\",\n     \"legendFormat\": \"errors\",\n     \"datasource\": {\n      \"type\": \"prometheus\"\
+    ,\n      \"uid\": \"prometheus\"\n     }\n    }\n   ],\n   \"fieldConfig\": {\n    \"defaults\": {\n     \"unit\": \"percentunit\",\n     \"thresholds\": {\n      \"mode\": \"absolute\",\n      \"steps\"\
+    : [\n       {\n        \"color\": \"green\",\n        \"value\": null\n       },\n       {\n        \"color\": \"red\",\n        \"value\": 0.05\n       }\n      ]\n     }\n    },\n    \"overrides\"\
+    : []\n   },\n   \"options\": {\n    \"reduceOptions\": {\n     \"calcs\": [\n      \"lastNotNull\"\n     ],\n     \"fields\": \"\",\n     \"values\": false\n    },\n    \"colorMode\": \"value\",\n \
+    \   \"graphMode\": \"area\",\n    \"textMode\": \"value_and_name\"\n   }\n  },\n  {\n   \"id\": 4,\n   \"title\": \"Bookings per second\",\n   \"type\": \"timeseries\",\n   \"datasource\": {\n    \"\
+    type\": \"prometheus\",\n    \"uid\": \"prometheus\"\n   },\n   \"gridPos\": {\n    \"x\": 0,\n    \"y\": 6,\n    \"w\": 12,\n    \"h\": 8\n   },\n   \"targets\": [\n    {\n     \"refId\": \"A\",\n\
+    \     \"expr\": \"sum by (result) (rate(campuspass_bookings_total{namespace=\\\"campuspass\\\"}[30s]))\",\n     \"legendFormat\": \"{{result}}\",\n     \"datasource\": {\n      \"type\": \"prometheus\"\
+    ,\n      \"uid\": \"prometheus\"\n     }\n    }\n   ],\n   \"fieldConfig\": {\n    \"defaults\": {\n     \"unit\": \"reqps\",\n     \"custom\": {\n      \"lineWidth\": 2,\n      \"fillOpacity\": 10,\n\
+    \      \"showPoints\": \"never\"\n     }\n    },\n    \"overrides\": []\n   },\n   \"options\": {\n    \"legend\": {\n     \"displayMode\": \"list\",\n     \"placement\": \"bottom\"\n    },\n    \"\
+    tooltip\": {\n     \"mode\": \"multi\"\n    }\n   },\n   \"description\": \"confirmed = seat sold, sold_out = refused because no seats left, duplicate = same student twice, error = should stay at zero.\"\
+    \n  },\n  {\n   \"id\": 5,\n   \"title\": \"Booking latency (p50 / p95)\",\n   \"type\": \"timeseries\",\n   \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"prometheus\"\n   },\n  \
+    \ \"gridPos\": {\n    \"x\": 12,\n    \"y\": 6,\n    \"w\": 12,\n    \"h\": 8\n   },\n   \"targets\": [\n    {\n     \"refId\": \"A\",\n     \"expr\": \"histogram_quantile(0.5, sum by (le) (rate(http_request_duration_seconds_bucket{app=\\\
+    \"booking-service\\\",route=\\\"/bookings\\\"}[1m])))\",\n     \"legendFormat\": \"p50\",\n     \"datasource\": {\n      \"type\": \"prometheus\",\n      \"uid\": \"prometheus\"\n     }\n    },\n  \
+    \  {\n     \"refId\": \"B\",\n     \"expr\": \"histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{app=\\\"booking-service\\\",route=\\\"/bookings\\\"}[1m])))\",\n     \"\
+    legendFormat\": \"p95\",\n     \"datasource\": {\n      \"type\": \"prometheus\",\n      \"uid\": \"prometheus\"\n     }\n    }\n   ],\n   \"fieldConfig\": {\n    \"defaults\": {\n     \"unit\": \"\
+    s\",\n     \"custom\": {\n      \"lineWidth\": 2,\n      \"fillOpacity\": 10,\n      \"showPoints\": \"never\"\n     }\n    },\n    \"overrides\": []\n   },\n   \"options\": {\n    \"legend\": {\n \
+    \    \"displayMode\": \"list\",\n     \"placement\": \"bottom\"\n    },\n    \"tooltip\": {\n     \"mode\": \"multi\"\n    }\n   }\n  },\n  {\n   \"id\": 6,\n   \"title\": \"CPU by pod\",\n   \"type\"\
+    : \"timeseries\",\n   \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"prometheus\"\n   },\n   \"gridPos\": {\n    \"x\": 0,\n    \"y\": 14,\n    \"w\": 12,\n    \"h\": 8\n   },\n  \
+    \ \"targets\": [\n    {\n     \"refId\": \"A\",\n     \"expr\": \"sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\\\"campuspass\\\",container!=\\\"\\\"}[1m]))\",\n     \"legendFormat\"\
+    : \"{{pod}}\",\n     \"datasource\": {\n      \"type\": \"prometheus\",\n      \"uid\": \"prometheus\"\n     }\n    }\n   ],\n   \"fieldConfig\": {\n    \"defaults\": {\n     \"unit\": \"cores\",\n\
+    \     \"custom\": {\n      \"lineWidth\": 2,\n      \"fillOpacity\": 10,\n      \"showPoints\": \"never\"\n     }\n    },\n    \"overrides\": []\n   },\n   \"options\": {\n    \"legend\": {\n     \"\
+    displayMode\": \"list\",\n     \"placement\": \"bottom\"\n    },\n    \"tooltip\": {\n     \"mode\": \"multi\"\n    }\n   }\n  },\n  {\n   \"id\": 7,\n   \"title\": \"Pod restarts (self-healing)\",\n\
+    \   \"type\": \"timeseries\",\n   \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"prometheus\"\n   },\n   \"gridPos\": {\n    \"x\": 12,\n    \"y\": 14,\n    \"w\": 12,\n    \"h\":\
+    \ 8\n   },\n   \"targets\": [\n    {\n     \"refId\": \"A\",\n     \"expr\": \"sum by (pod) (kube_pod_container_status_restarts_total{namespace=\\\"campuspass\\\"})\",\n     \"legendFormat\": \"{{pod}}\"\
+    ,\n     \"datasource\": {\n      \"type\": \"prometheus\",\n      \"uid\": \"prometheus\"\n     }\n    }\n   ],\n   \"fieldConfig\": {\n    \"defaults\": {\n     \"custom\": {\n      \"lineWidth\":\
+    \ 2,\n      \"fillOpacity\": 10,\n      \"showPoints\": \"never\"\n     }\n    },\n    \"overrides\": []\n   },\n   \"options\": {\n    \"legend\": {\n     \"displayMode\": \"list\",\n     \"placement\"\
+    : \"bottom\"\n    },\n    \"tooltip\": {\n     \"mode\": \"multi\"\n    }\n   },\n   \"description\": \"A pod killed by the chaos script is replaced automatically; restarts and new pods show up here.\"\
+    \n  },\n  {\n   \"id\": 8,\n   \"title\": \"Gate check-ins (last 5 min)\",\n   \"type\": \"timeseries\",\n   \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"prometheus\"\n   },\n  \
+    \ \"gridPos\": {\n    \"x\": 0,\n    \"y\": 22,\n    \"w\": 12,\n    \"h\": 8\n   },\n   \"targets\": [\n    {\n     \"refId\": \"A\",\n     \"expr\": \"sum by (result) (increase(campuspass_checkins_total{namespace=\\\
+    \"campuspass\\\"}[5m]))\",\n     \"legendFormat\": \"{{result}}\",\n     \"datasource\": {\n      \"type\": \"prometheus\",\n      \"uid\": \"prometheus\"\n     }\n    }\n   ],\n   \"fieldConfig\":\
+    \ {\n    \"defaults\": {\n     \"custom\": {\n      \"lineWidth\": 2,\n      \"fillOpacity\": 10,\n      \"showPoints\": \"never\"\n     }\n    },\n    \"overrides\": []\n   },\n   \"options\": {\n\
+    \    \"legend\": {\n     \"displayMode\": \"list\",\n     \"placement\": \"bottom\"\n    },\n    \"tooltip\": {\n     \"mode\": \"multi\"\n    }\n   }\n  },\n  {\n   \"id\": 9,\n   \"title\": \"Requests\
+    \ per second by service\",\n   \"type\": \"timeseries\",\n   \"datasource\": {\n    \"type\": \"prometheus\",\n    \"uid\": \"prometheus\"\n   },\n   \"gridPos\": {\n    \"x\": 12,\n    \"y\": 22,\n\
+    \    \"w\": 12,\n    \"h\": 8\n   },\n   \"targets\": [\n    {\n     \"refId\": \"A\",\n     \"expr\": \"sum by (app) (rate(http_request_duration_seconds_count{namespace=\\\"campuspass\\\"}[1m]))\"\
+    ,\n     \"legendFormat\": \"{{app}}\",\n     \"datasource\": {\n      \"type\": \"prometheus\",\n      \"uid\": \"prometheus\"\n     }\n    },\n    {\n     \"refId\": \"B\",\n     \"expr\": \"sum by\
+    \ (app) (rate(http_requests_total{namespace=\\\"campuspass\\\"}[1m]))\",\n     \"legendFormat\": \"{{app}}\",\n     \"datasource\": {\n      \"type\": \"prometheus\",\n      \"uid\": \"prometheus\"\n\
+    \     }\n    },\n    {\n     \"refId\": \"C\",\n     \"expr\": \"sum by (app) (rate(http_server_requests_seconds_count{namespace=\\\"campuspass\\\"}[1m]))\",\n     \"legendFormat\": \"{{app}}\",\n \
+    \    \"datasource\": {\n      \"type\": \"prometheus\",\n      \"uid\": \"prometheus\"\n     }\n    }\n   ],\n   \"fieldConfig\": {\n    \"defaults\": {\n     \"unit\": \"reqps\",\n     \"custom\":\
+    \ {\n      \"lineWidth\": 2,\n      \"fillOpacity\": 10,\n      \"showPoints\": \"never\"\n     }\n    },\n    \"overrides\": []\n   },\n   \"options\": {\n    \"legend\": {\n     \"displayMode\": \"\
+    list\",\n     \"placement\": \"bottom\"\n    },\n    \"tooltip\": {\n     \"mode\": \"multi\"\n    }\n   }\n  },\n  {\n   \"id\": 10,\n   \"title\": \"Logs: errors and warnings\",\n   \"type\": \"logs\"\
+    ,\n   \"datasource\": {\n    \"type\": \"loki\",\n    \"uid\": \"loki\"\n   },\n   \"gridPos\": {\n    \"x\": 0,\n    \"y\": 30,\n    \"w\": 24,\n    \"h\": 10\n   },\n   \"targets\": [\n    {\n   \
+    \  \"refId\": \"A\",\n     \"expr\": \"{namespace=\\\"campuspass\\\"} |~ \\\"(?i)(error|warn|\\\\\\\"level\\\\\\\":(40|50))\\\"\",\n     \"legendFormat\": \"\",\n     \"datasource\": {\n      \"type\"\
+    : \"loki\",\n      \"uid\": \"loki\"\n     }\n    }\n   ],\n   \"fieldConfig\": {\n    \"defaults\": {},\n    \"overrides\": []\n   },\n   \"options\": {\n    \"showTime\": true,\n    \"wrapLogMessage\"\
+    : true,\n    \"sortOrder\": \"Descending\"\n   }\n  }\n ]\n}"

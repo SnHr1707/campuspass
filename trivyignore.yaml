@@ -1,0 +1,12 @@
+# Trivy findings reviewed and accepted, each with the reason. Everything else fails the build.
+misconfigurations:
+  - id: DS-0031
+    paths: ["services/api-gateway/Dockerfile"]
+    statement: >-
+      False positive. AUTH_UPSTREAM and RATE_*_AUTH contain a host:port and rate-limit numbers,
+      not secrets. Trivy flags them only because the names contain "AUTH".
+  - id: KSV-0109
+    paths: ["monitoring/manifests/dashboard.yaml"]
+    statement: >-
+      False positive. The ConfigMap holds a Grafana dashboard definition (panel titles and
+      PromQL queries); it contains no credentials.
