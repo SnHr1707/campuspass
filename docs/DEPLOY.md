@@ -3,8 +3,16 @@
 This guide takes you from nothing to a public HTTPS link on one AWS EC2 server, paid from the
 AWS credits. Everything runs from PowerShell. Total time: about an hour, mostly waiting.
 
-**Cost:** about $40/month (t4g.large in Mumbai about $33, fixed public IP about $3.65, 40 GB disk about $3.50).
-Terraform also creates a budget alert that emails you at 50% and 80% of $50/month.
+**Which server type:**
+
+| Your AWS account | `instance_type` | Server cost |
+|---|---|---|
+| **Free plan** (default; you can never be charged, credits only) | `m7i-flex.large` (the default) | about $0.10/hour, roughly $70/month of credits |
+| **Paid plan** (credits still apply; charges after they run out) | `t4g.large` | about $0.045/hour, roughly $33/month |
+
+Both have 2 vCPUs and 8 GB RAM. Add about $7/month for the fixed IP and disk. Terraform also creates a
+budget alert that emails you at 50% and 80% of $50/month. To use `t4g.large`, add
+`instance_type = "t4g.large"` to `terraform.tfvars`.
 
 ## What you need
 
@@ -129,7 +137,7 @@ security headers and runs an OWASP ZAP scan.
 
 | Symptom | Fix |
 |---|---|
-| `terraform apply` says the instance type is not allowed | Free plan accounts can block some types. Upgrade to the Paid plan in Billing (credits still apply), or set `instance_type = "t4g.medium"`. |
+| "instance type is not eligible for Free Tier" | Free plan accounts can only use `m7i-flex.large` (the default) among 8 GB types. Remove any `instance_type` line from `terraform.tfvars`, or upgrade to the Paid plan to use `t4g.large`. |
 | `No valid credential sources found` | Run `aws configure --profile campuspass` again (step 3). |
 | Pods stuck in `ImagePullBackOff` | The GHCR packages are still private (step 1). |
 | Pods stuck in `CreateContainerConfigError` | The Secret is missing: run `bootstrap.ps1` again. |

@@ -19,7 +19,7 @@ Built for **4CS505ME25 Cloud Native Applications and DevOps** (B.Tech CSE, Sem V
 ```mermaid
 flowchart TB
     U[Students, organisers, volunteers] -->|HTTPS| I[Traefik Ingress + cert-manager TLS]
-    subgraph k3s["k3s cluster on an AWS EC2 t4g.large (ARM Graviton) server"]
+    subgraph k3s["k3s cluster on one AWS EC2 server (2 vCPU, 8 GB)"]
         I -->|/| FE[frontend<br/>React + NGINX]
         I -->|/api| GW[api-gateway<br/>NGINX: JWT check, rate limits]
         GW --> AUTH[auth-service<br/>Node.js]

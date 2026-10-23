@@ -84,8 +84,9 @@ write_files:
       kubectl wait --for=condition=Ready node --all --timeout=300s
 
       # 4. Helm.
-      curl -fsSL "https://get.helm.sh/helm-$HELM_VERSION-linux-arm64.tar.gz" | tar xz -C /tmp
-      install -m 0755 /tmp/linux-arm64/helm /usr/local/bin/helm
+      ARCH=$(dpkg --print-architecture)   # amd64 (Intel) or arm64 (Graviton)
+      curl -fsSL "https://get.helm.sh/helm-$HELM_VERSION-linux-$ARCH.tar.gz" | tar xz -C /tmp
+      install -m 0755 "/tmp/linux-$ARCH/helm" /usr/local/bin/helm
       helm repo add jetstack https://charts.jetstack.io
       helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
       helm repo add grafana https://grafana.github.io/helm-charts
