@@ -1,4 +1,4 @@
-# Production on the Oracle Cloud k3s VM. Argo CD deploys this folder from the "gitops" branch;
+# Production on the AWS EC2 k3s server. Argo CD deploys this folder from the "gitops" branch;
 # the CI pipeline updates the image tags below on that branch after every successful build.
 #
 # Before the first deploy, set YOUR domain in ingress-patch.yaml (two places).
