@@ -1,5 +1,5 @@
-fastapi==0.143.0
+fastapi==0.162.2
 uvicorn[standard]==0.54.0
-sqlalchemy==2.1.4
-psycopg[binary]==3.3.6
+sqlalchemy==2.1.8
+psycopg[binary]==3.3.8
 prometheus-fastapi-instrumentator==8.1.0
